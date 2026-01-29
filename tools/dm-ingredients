@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Add inactive ingredients to drug records. Reads JSON from stdin, outputs JSON to stdout."""
+
+import json
+import re
+import sys
+import requests
+
+BASE_URL = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
+HEADERS = {"Accept": "application/json"}
+
+
+def get_inactive_ingredients(setid: str) -> list[str]:
+    """Fetch inactive ingredients from DailyMed XML."""
+    try:
+        url = f"{BASE_URL}/spls/{setid}.xml"
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+
+        pattern = r'<ingredient[^>]*classCode="IACT"[^>]*>.*?<name>([^<]+)</name>'
+        matches = re.findall(pattern, resp.text, re.DOTALL | re.IGNORECASE)
+        return list(set(m.strip() for m in matches))
+    except Exception:
+        return []
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Add inactive ingredients")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show progress")
+    args = parser.parse_args()
+
+    drugs = json.load(sys.stdin)
+
+    for i, drug in enumerate(drugs):
+        if args.verbose:
+            print(f"[{i+1}/{len(drugs)}] {drug.get('title', '')[:40]}...", file=sys.stderr)
+        drug["inactive_ingredients"] = get_inactive_ingredients(drug.get("setid"))
+
+    json.dump(drugs, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()

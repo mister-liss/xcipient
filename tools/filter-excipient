@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Filter out drugs containing specified excipients. Reads JSON from stdin, outputs JSON to stdout."""
+
+import json
+import sys
+
+
+def has_excipient(drug: dict, excluded: list[str]) -> bool:
+    """Check if drug contains any excluded excipient."""
+    ingredients = drug.get("inactive_ingredients", [])
+    for ing in ingredients:
+        ing_lower = ing.lower()
+        for exc in excluded:
+            if exc.lower() in ing_lower:
+                return True
+    return False
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Filter drugs by excipient")
+    parser.add_argument("exclude", nargs="+", help="Excipients to exclude")
+    parser.add_argument("--invert", action="store_true", help="Invert (keep matches)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show stats")
+    args = parser.parse_args()
+
+    drugs = json.load(sys.stdin)
+    results = []
+    removed = 0
+
+    for drug in drugs:
+        has_it = has_excipient(drug, args.exclude)
+        keep = has_it if args.invert else not has_it
+
+        if keep:
+            results.append(drug)
+        else:
+            removed += 1
+
+    if args.verbose:
+        print(f"Kept {len(results)}, removed {removed}", file=sys.stderr)
+
+    json.dump(results, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()

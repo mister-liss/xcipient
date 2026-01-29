@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Search DailyMed for drugs by name. Outputs JSON array to stdout."""
+
+import json
+import sys
+import requests
+
+BASE_URL = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
+HEADERS = {"Accept": "application/json"}
+
+
+def log(msg, verbose):
+    if verbose:
+        print(msg, file=sys.stderr)
+
+
+def search(drug_name: str, limit: int = 0, verbose: bool = False):
+    """Search DailyMed and yield results."""
+    page = 1
+    count = 0
+
+    while True:
+        params = {"drug_name": drug_name, "page": page, "pagesize": 100}
+        log(f"Fetching page {page}...", verbose)
+
+        resp = requests.get(f"{BASE_URL}/spls.json", params=params, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        results = data.get("data", [])
+        if not results:
+            break
+
+        for drug in results:
+            yield {
+                "setid": drug.get("setid"),
+                "title": drug.get("title"),
+                "manufacturer": extract_manufacturer(drug.get("title", ""))
+            }
+            count += 1
+            if limit and count >= limit:
+                return
+
+        total_pages = data.get("metadata", {}).get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+
+def extract_manufacturer(title: str) -> str:
+    import re
+    match = re.search(r'\[([^\]]+)\]', title)
+    return match.group(1) if match else "Unknown"
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Search DailyMed for drugs")
+    parser.add_argument("drug_name", help="Drug name to search")
+    parser.add_argument("-n", "--limit", type=int, default=0, help="Limit results")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show progress")
+    args = parser.parse_args()
+
+    results = list(search(args.drug_name, args.limit, args.verbose))
+    log(f"Found {len(results)} drugs", args.verbose)
+    json.dump(results, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()

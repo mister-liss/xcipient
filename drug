@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+import os, sys
+sys.exit(os.execvp("python3", ["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "drug.py")] + sys.argv[1:]))

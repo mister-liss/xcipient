@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Check NADAC availability for drugs. Reads JSON from stdin, outputs JSON to stdout."""
+
+import json
+import sys
+import requests
+
+NADAC_API = "https://data.medicaid.gov/api/1/datastore/query/99315a95-37ac-4eee-946a-3c523b4c481e/0"
+
+
+def check_ndc(ndc: str) -> bool:
+    try:
+        params = {"conditions[0][property]": "ndc", "conditions[0][value]": ndc, "limit": 1}
+        resp = requests.get(NADAC_API, params=params, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("count", 0) > 0
+    except Exception:
+        return False
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Check NADAC availability")
+    parser.add_argument("--filter", action="store_true", help="Only output available drugs")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show progress")
+    args = parser.parse_args()
+
+    drugs = json.load(sys.stdin)
+    results = []
+    available = 0
+
+    for i, drug in enumerate(drugs):
+        if args.verbose:
+            print(f"[{i+1}/{len(drugs)}] {drug.get('title', '')[:40]}...", file=sys.stderr)
+
+        ndcs = drug.get("ndcs", [])
+        is_available = ndcs and check_ndc(ndcs[0])
+        drug["nadac_available"] = is_available
+
+        if is_available:
+            available += 1
+
+        if not args.filter or is_available:
+            results.append(drug)
+
+    if args.verbose:
+        print(f"Available: {available}/{len(drugs)}", file=sys.stderr)
+
+    json.dump(results, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Add NDC codes to drug records. Reads JSON from stdin, outputs JSON to stdout."""
+
+import json
+import sys
+import requests
+
+BASE_URL = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
+HEADERS = {"Accept": "application/json"}
+
+
+def normalize_ndc(ndc: str) -> str:
+    if "-" in ndc:
+        parts = ndc.split("-")
+        if len(parts) == 3:
+            return parts[0].zfill(5) + parts[1].zfill(4) + parts[2].zfill(2)
+    return ndc.replace("-", "").zfill(11)
+
+
+def get_ndcs(setid: str) -> list[str]:
+    try:
+        url = f"{BASE_URL}/spls/{setid}/ndcs.json"
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        ndcs = resp.json().get("data", {}).get("ndcs", [])
+        return [normalize_ndc(n.get("ndc", "")) for n in ndcs if n.get("ndc")]
+    except Exception:
+        return []
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Add NDC codes")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show progress")
+    args = parser.parse_args()
+
+    drugs = json.load(sys.stdin)
+
+    for i, drug in enumerate(drugs):
+        if args.verbose:
+            print(f"[{i+1}/{len(drugs)}] {drug.get('title', '')[:40]}...", file=sys.stderr)
+        drug["ndcs"] = get_ndcs(drug.get("setid"))
+
+    json.dump(drugs, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()

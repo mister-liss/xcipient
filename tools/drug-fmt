@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Format drug data for display. Reads JSON from stdin, outputs formatted text."""
+
+import json
+import sys
+from collections import defaultdict
+
+
+def format_table(drugs: list[dict], group_by: str = None):
+    """Format as readable table, optionally grouped."""
+    if group_by:
+        groups = defaultdict(list)
+        for drug in drugs:
+            key = drug.get(group_by, "Unknown")
+            groups[key].append(drug)
+
+        for key in sorted(groups.keys()):
+            print(f"\n{key}:")
+            for drug in groups[key]:
+                print_drug_line(drug, indent=2)
+    else:
+        for drug in drugs:
+            print_drug_line(drug)
+
+
+def print_drug_line(drug: dict, indent: int = 0):
+    """Print single drug line."""
+    prefix = " " * indent
+    title = drug.get("title", "Unknown")
+
+    # Extract dosage form from title
+    form = "?"
+    if "CAPSULE" in title.upper():
+        form = "cap"
+    elif "TABLET" in title.upper():
+        form = "tab"
+    elif "SOLUTION" in title.upper() or "LIQUID" in title.upper():
+        form = "liq"
+
+    # Get availability
+    avail = "✓" if drug.get("nadac_available") else "✗"
+
+    # Get strengths from inactive_ingredients or title
+    # (simplified - would need active ingredients for real strengths)
+
+    print(f"{prefix}{avail} [{form}] {drug.get('manufacturer', 'Unknown')}")
+
+
+def format_csv(drugs: list[dict]):
+    """Format as CSV."""
+    import csv
+    import io
+
+    output = io.StringIO()
+    fieldnames = ["manufacturer", "title", "nadac_available", "ndcs", "inactive_ingredients"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+
+    for drug in drugs:
+        row = drug.copy()
+        row["ndcs"] = ";".join(drug.get("ndcs", [])[:3])
+        row["inactive_ingredients"] = ";".join(drug.get("inactive_ingredients", []))
+        writer.writerow(row)
+
+    print(output.getvalue())
+
+
+def format_summary(drugs: list[dict]):
+    """Format as summary table by manufacturer."""
+    by_mfr = defaultdict(lambda: {"forms": set(), "available": False})
+
+    for drug in drugs:
+        mfr = drug.get("manufacturer", "Unknown")
+        title = drug.get("title", "").upper()
+
+        if "CAPSULE" in title:
+            by_mfr[mfr]["forms"].add("cap")
+        elif "TABLET" in title:
+            by_mfr[mfr]["forms"].add("tab")
+        elif "SOLUTION" in title or "LIQUID" in title:
+            by_mfr[mfr]["forms"].add("liq")
+
+        if drug.get("nadac_available"):
+            by_mfr[mfr]["available"] = True
+
+    # Print table
+    print(f"{'Manufacturer':<40} {'Forms':<15} {'Available':<10}")
+    print("-" * 65)
+
+    for mfr in sorted(by_mfr.keys()):
+        info = by_mfr[mfr]
+        forms = ", ".join(sorted(info["forms"])) or "?"
+        avail = "YES" if info["available"] else "no"
+        print(f"{mfr:<40} {forms:<15} {avail:<10}")
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Format drug data")
+    parser.add_argument("-f", "--format", choices=["table", "csv", "summary", "json"],
+                        default="summary", help="Output format")
+    parser.add_argument("-g", "--group-by", help="Group by field (for table format)")
+    args = parser.parse_args()
+
+    drugs = json.load(sys.stdin)
+
+    if args.format == "table":
+        format_table(drugs, args.group_by)
+    elif args.format == "csv":
+        format_csv(drugs)
+    elif args.format == "summary":
+        format_summary(drugs)
+    elif args.format == "json":
+        json.dump(drugs, sys.stdout, indent=2)
+
+
+if __name__ == "__main__":
+    main()
