@@ -9,10 +9,12 @@ Usage:
     drug ndcs                  Add NDC codes
     drug nadac                 Check NADAC availability
     drug fmt                   Format output
+    drug compare <ndc> ...     Compare ingredients across products by NDC
 
 Examples:
     drug search fluoxetine | drug ingredients | drug filter "propylene glycol" | drug fmt
     drug search fluoxetine -n 10 | drug ingredients | drug fmt -f csv
+    drug search fluoxetine | drug ingredients | drug compare 65862019201 00228202611
 """
 
 import io
@@ -342,6 +344,59 @@ def _short_strength(strength):
     return strength.replace(" ", "")
 
 
+def _fmt_comparison(data):
+    """Render a comparison result as a box-drawing table."""
+    columns = data["products"]
+    common = data["common"]
+    unique = data["unique"]
+
+    # Legend
+    print(f"\nComparing {len(columns)} products:")
+    for col in columns:
+        print(f"  {col['label']}: {col['manufacturer']} {col['form']} {col['strength']}")
+    print()
+
+    all_sorted = common + unique
+    if not all_sorted:
+        print("No ingredients to compare.")
+        return
+
+    ing_width = max(len("Ingredient"), max(len(ing) for ing in all_sorted)) + 2
+    col_width = 3
+
+    col_dashes = "".join(f"\u252c{'\u2500' * col_width}" for _ in columns) + "\u2510"
+    col_crosses = "".join(f"\u253c{'\u2500' * col_width}" for _ in columns) + "\u2524"
+    col_bottom = "".join(f"\u2534{'\u2500' * col_width}" for _ in columns) + "\u2518"
+
+    top_line = f"\u250c{'\u2500' * ing_width}{col_dashes}"
+    header_marks = "".join(f"\u2502 {col['label']} " for col in columns) + "\u2502"
+    header_line = f"\u2502 {'Ingredient':<{ing_width - 2}} {header_marks}"
+    sep_line = f"\u251c{'\u2500' * ing_width}{col_crosses}"
+    bottom_line = f"\u2514{'\u2500' * ing_width}{col_bottom}"
+
+    print(top_line)
+    print(header_line)
+
+    def print_row(ing):
+        marks = ""
+        for col in columns:
+            present = ing in col["inactive_ingredients"]
+            marks += f"\u2502 {'\u2713' if present else '-'} "
+        print(f"\u2502 {ing:<{ing_width - 2}} {marks}\u2502")
+
+    print(sep_line)
+    for ing in common:
+        print_row(ing)
+
+    if common and unique:
+        print(sep_line)
+
+    for ing in unique:
+        print_row(ing)
+
+    print(bottom_line)
+
+
 def cmd_fmt(args):
     """Format drug data for display."""
     import argparse
@@ -349,7 +404,17 @@ def cmd_fmt(args):
     parser.add_argument("-f", "--format", choices=["summary", "table", "csv", "json"], default="summary")
     opts = parser.parse_args(args)
 
-    drugs = json.load(sys.stdin)
+    data = json.load(sys.stdin)
+
+    # Detect comparison data
+    if isinstance(data, dict) and data.get("type") == "comparison":
+        if opts.format == "json":
+            json.dump(data, sys.stdout, indent=2)
+            return
+        _fmt_comparison(data)
+        return
+
+    drugs = data
 
     if opts.format == "json":
         json.dump(drugs, sys.stdout, indent=2)
@@ -427,6 +492,73 @@ def cmd_fmt(args):
     print(bottom)
 
 
+# ============ COMPARE ============
+
+def cmd_compare(args):
+    """Compare inactive ingredients across products by NDC."""
+    import argparse
+    import string
+    parser = argparse.ArgumentParser(prog="drug compare")
+    parser.add_argument("ndcs", nargs="+", help="NDC codes to compare (11-digit or dashed)")
+    opts = parser.parse_args(args)
+
+    if len(opts.ndcs) < 2:
+        print("Error: need at least 2 NDCs to compare", file=sys.stderr)
+        sys.exit(1)
+
+    products = json.load(sys.stdin)
+    requested = [_normalize_ndc(n) for n in opts.ndcs]
+
+    # Match each requested NDC to a product record
+    matched = []
+    for ndc in requested:
+        found = None
+        for rec in products:
+            if ndc in rec.get("ndcs", []):
+                found = rec
+                break
+        if found is None:
+            print(f"Warning: NDC {ndc} not found in input, skipping", file=sys.stderr)
+        else:
+            matched.append((ndc, found))
+
+    if len(matched) < 2:
+        print("Error: need at least 2 matched products to compare", file=sys.stderr)
+        sys.exit(1)
+
+    # Assign column letters and build ingredient sets
+    letters = list(string.ascii_uppercase)
+    col_ingredients = []
+    columns = []
+    for i, (ndc, rec) in enumerate(matched):
+        label = letters[i] if i < len(letters) else str(i)
+        ings = rec.get("inactive_ingredients", [])
+        col_ingredients.append(set(ings))
+        columns.append({
+            "label": label,
+            "ndc": ndc,
+            "manufacturer": rec.get("manufacturer", "Unknown"),
+            "form": _short_form(rec.get("form", "")),
+            "strength": _short_strength(rec.get("strength", "")),
+            "inactive_ingredients": ings,
+        })
+
+    all_ingredients = set()
+    for s in col_ingredients:
+        all_ingredients |= s
+
+    common = sorted([ing for ing in all_ingredients if all(ing in s for s in col_ingredients)])
+    unique = sorted([ing for ing in all_ingredients if not all(ing in s for s in col_ingredients)])
+
+    result = {
+        "type": "comparison",
+        "products": columns,
+        "common": common,
+        "unique": unique,
+    }
+    json.dump(result, sys.stdout, indent=2)
+
+
 # ============ MAIN ============
 
 COMMANDS = {
@@ -436,6 +568,7 @@ COMMANDS = {
     "ndcs": cmd_ndcs,
     "nadac": cmd_nadac,
     "fmt": cmd_fmt,
+    "compare": cmd_compare,
 }
 
 def main():
